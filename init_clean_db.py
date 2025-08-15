@@ -38,6 +38,7 @@ internal_id INTEGER PRIMARY KEY AUTOINCREMENT,
 user_id TEXT NOT NULL,
 key_id INTEGER,
 link TEXT,
+prefix TEXT,
 FOREIGN KEY (user_id) REFERENCES Users (telegram_id),
 FOREIGN KEY (key_id) REFERENCES Keys (internal_id)
 )

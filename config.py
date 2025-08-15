@@ -43,5 +43,6 @@ token = config('BOT_TOKEN')
 gateway = str(config('OUTLINE_USERS_GATEWAY'))
 salt = str(config('OUTLINE_SALT'))
 admin_id = str(config('ADMIN_ID'))
+key_limit = str(config('KEY_LIMIT'))
 
 client = OutlineVPN(api_url=str(api_url), cert_sha256=str(cert_sha256))
