@@ -53,10 +53,7 @@ def choose_prefix_markup(exclusion: str):
     values.append(menu_button)
     buttons = [values[i:i+2] for i in range(0, len(values), 2)]
     for row in buttons:
-        if len(row) > 1:
-            markup.add(row[0], row[1])
-        else:
-            markup.add(row[0])
+        markup.add(*row)
     return markup
 
 
@@ -122,7 +119,7 @@ def view_my_links(query):
         text += 'Сейчас ссылка не привязана ни к одному из ваших ключей\n'
     prefix = data[0][2]
     if prefix is not None:
-        text += 'Для стабильного соединения используется префикс типа <code>' + prefix + '</code>'
+        text += 'Используется префикс вида <code>' + prefix + '</code>'
     else:
         text += 'Префикс не используется'
     what_button = types.InlineKeyboardButton(text='Что такое префикс?', callback_data='wtf_is_prefix')
@@ -137,6 +134,37 @@ def view_my_links(query):
         markup.add(key_button, menu_button)
     else:
         markup.add(menu_button)
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: 'connect_my_link' in f.data)
+def connect_my_link(query):
+    id = query.from_user.id
+    cursor.execute('SELECT key_id FROM Ownership WHERE user_id=?', (id,))
+    keys = [key[0] for key in cursor.fetchall()]
+    if len(query.data.split()) > 1:
+        link_key = int(query.data.split()[1])
+        data = (link_key, id)
+        cursor.execute('UPDATE Links SET key_id=? WHERE user_id=?', data)
+        connection.commit()
+    else:
+        cursor.execute('SELECT key_id FROM Links WHERE user_id=?', (id,))
+        link_key = cursor.fetchall()[0][0]
+    if link_key in keys:
+        keys.remove(link_key)
+    buttons = [types.InlineKeyboardButton(text=str(keys[i]), callback_data='connect_my_link '+str(keys[i])) for i in range(len(keys))]
+    markup = types.InlineKeyboardMarkup(row_width=3)
+    if link_key is None:
+        text = 'Динамическая ссылка не привязана к ключу\n'
+    else:
+        text = 'Динамическая ссылка привязана к ключу с id: <code>' + str(link_key) + '</code>\n'
+    text += 'Вы можете привязать ссылку к ключу, выбрав нужную кнопку'
+    rowed_buttons = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
+    for row in rowed_buttons:
+        markup.add(*row)
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    link_button = types.InlineKeyboardButton(text='Посмотреть ссылку', callback_data='my_dynamic_link')
+    markup.add(link_button, menu_button)
     bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
 
 
@@ -162,11 +190,13 @@ def set_prefix(query):
         prefixes = {'None': None, 'HTTP-req': 'HTTP-запрос', 'HTTP-res': 'HTTP-ответ', 'dns': 'DNS-over-TCP-запрос', 
                     'tls_client': 'TLS ClientHello', 'tls_application': 'TLS Application Data', 'tls_server': 'TLS ServerHello',
                     'ssh': 'SSH'}
-        data = (prefixes[prefix], id)
+        prefix = prefixes[prefix]
+        data = (prefix, id)
         cursor.execute('UPDATE Links SET prefix=? WHERE user_id=?', data)
         connection.commit()
-    cursor.execute('SELECT prefix FROM Links WHERE user_id=?', (id,))
-    prefix = cursor.fetchall()[0][0]
+    else:
+        cursor.execute('SELECT prefix FROM Links WHERE user_id=?', (id,))
+        prefix = cursor.fetchall()[0][0]
     if prefix is None:
         text = 'Сейчас префикс не используется\n'
     else:
@@ -224,5 +254,6 @@ def view_users(query):
         bot.send_message(chat_id=id, text=new_text[-1], parse_mode='HTML', reply_markup=markup, protect_content=True)
 
 
+# bot.infinity_polling()
 bot.polling(non_stop=True)
 connection.close()
