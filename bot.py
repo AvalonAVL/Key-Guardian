@@ -1,6 +1,8 @@
 from telebot import TeleBot, types
+from telebot.util import split_string, quick_markup
+from telebot.apihelper import ApiTelegramException
 from sqlite3 import connect
-from config import token, key_limit
+from config import token, key_limit, create_dynamic_link
 
 bot = TeleBot(str(token))
 
@@ -11,7 +13,7 @@ connection.commit()
 
 
 def user_menu_markup():
-    markup = types.InlineKeyboardMarkup()
+    markup = types.InlineKeyboardMarkup(row_width=2)
     button1 = types.InlineKeyboardButton(text='Получить новый ключ', callback_data='get_new_key')
     button2 = types.InlineKeyboardButton(text='Посмотреть мои ключи', callback_data='view_my_keys')
     button3 = types.InlineKeyboardButton(text='Моя динамическая ссылка', callback_data='my_dynamic_link')
@@ -56,6 +58,47 @@ def choose_prefix_markup(exclusion: str):
         markup.add(*row)
     return markup
 
+def add_user_markup():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    add_button = types.InlineKeyboardButton(text='Попробовать снова', callback_data='add_user')
+    markup.add(add_button, menu_button)
+    return markup
+
+
+def add_user_via_id(message):
+    id = message.from_user.id
+    user_id = message.text
+    try:
+        new_user = bot.get_chat_member(chat_id=user_id, user_id=user_id)
+        user_data = (new_user.user.id, new_user.user.username, new_user.user.first_name, new_user.user.last_name)
+        user_available = True
+    except ApiTelegramException:
+        user_available = False
+        user_data = ()
+    if len(user_id) > 52 or not str(user_id).isdigit():
+        text = 'К сожалению, Telegram ID пользователя не выглядит валидным. Мы не можем добавить такого пользователя'
+        bot.send_message(chat_id=id, text=text, reply_markup=add_user_markup(), protect_content=True)
+        return 
+    cursor.execute('SELECT telegram_id FROM Users WHERE telegram_id=?', (user_id,))
+    data = cursor.fetchall()
+    if len(data):
+        text = 'Пользователь с данным Telegram ID уже есть в базе'
+        bot.send_message(chat_id=id, text=text, reply_markup=add_user_markup(), protect_content=True)
+        return
+    markup = types.InlineKeyboardMarkup()
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    markup.add(menu_button)
+    if not user_available:
+        text = 'Успешно добавлен пользователь с id: <code>' + user_id + '</code>'
+        cursor.execute('INSERT INTO Users (telegram_id) VALUES (?)', (user_id,))
+    else:
+        text = 'Успешно добавлен пользователь с id: <code>' + user_id + '</code> и его данные'
+        cursor.execute('INSERT INTO Users (telegram_id, username, first_name, last_name) VALUES (?, ?, ?, ?)', user_data)
+    cursor.execute('INSERT INTO Links (user_id, link) VALUES (?, ?)', (user_id, create_dynamic_link(user_id)))
+    connection.commit()
+    bot.send_message(chat_id=id, text=text, reply_markup=markup, parse_mode='HTML', protect_content=True)
+
 
 @bot.message_handler(commands=['start', 'auth'])
 def start(message):
@@ -95,9 +138,12 @@ def menu(query):
 
 
 @bot.callback_query_handler(func=lambda f: f.data == 'add_user')
-def add_user(query):
+def add_user_menu(query):
     id = query.from_user.id
-    
+    message = bot.send_message(chat_id=id, text='Введите Telegram ID пользователя, которого хотите добавить', protect_content=True)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    bot.register_next_step_handler(message, add_user_via_id)
+
 
 @bot.callback_query_handler(func=lambda f: f.data == 'my_dynamic_link')
 def view_my_links(query):
@@ -116,7 +162,7 @@ def view_my_links(query):
     elif not keys:
         text += 'У вас нет ключей <i>(ссылка не работает без привязки к ключу)</i>\n'
     else:
-        text += 'Сейчас ссылка не привязана ни к одному из ваших ключей\n'
+        text += 'Сейчас ссылка не привязана ни к одному из ваших ключей <i>(cсылка не работает без привязки к ключу)</i>\n'
     prefix = data[0][2]
     if prefix is not None:
         text += 'Используется префикс вида <code>' + prefix + '</code>'
@@ -248,7 +294,7 @@ def view_users(query):
     if len(text) <= chunk_size:
         bot.send_message(chat_id=id, text=text, parse_mode='HTML', reply_markup=markup, protect_content=True)
     else:
-        new_text = [text[i:i+chunk_size] for i in range(0, len(text), chunk_size)]
+        new_text = split_string(text=text, chars_per_string=chunk_size)
         for i in range(len(new_text)-1):
             bot.send_message(chat_id=id, text=new_text[i], parse_mode='HTML', protect_content=True)
         bot.send_message(chat_id=id, text=new_text[-1], parse_mode='HTML', reply_markup=markup, protect_content=True)
