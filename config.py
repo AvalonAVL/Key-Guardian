@@ -1,5 +1,6 @@
 from decouple import config
 from outline_vpn.outline_vpn import OutlineVPN
+from urllib.parse import quote
 
 def gb_to_bytes(gb: float):
     if gb is not None:
@@ -35,6 +36,15 @@ def get_service_info():
 def create_dynamic_link(user_id: str, conn_name: str ='connect'):
     id = int(user_id)
     return f"{gateway}/conf/{salt}{hex(id)}#{conn_name}"
+
+def url_prefix(prefix: str):
+    prefixes = {'HTTP-запрос': 'POST%20', 'HTTP-ответ': 'HTTP%2F1.1%20', 'DNS-over-TCP-запрос': '%05%C3%9C_%C3%A0%01%20',
+                'TLS ClientHello': '%16%03%01%00%C2%A8%01%01', 'TLS Application Data': '%13%03%03%3F',
+                'TLS ServerHello' : '%16%03%03%40%00%02', 'SSH': 'SSH-2.0%0D%0A'}
+    if prefix in list(prefixes.keys()):
+        return prefixes[prefix]
+    else:
+        return quote(string=prefix, encoding='utf-8')
 
 
 api_url = config('API_URL')

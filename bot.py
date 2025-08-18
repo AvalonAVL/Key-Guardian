@@ -2,7 +2,7 @@ from telebot import TeleBot, types
 from telebot.util import split_string, quick_markup
 from telebot.apihelper import ApiTelegramException
 from sqlite3 import connect
-from config import token, key_limit, create_dynamic_link
+from config import token, key_limit, create_dynamic_link, url_prefix
 
 bot = TeleBot(str(token))
 
@@ -65,6 +65,15 @@ def add_user_markup():
     markup.add(add_button, menu_button)
     return markup
 
+def split_send(text: str, chat_id: str, markup: types.InlineKeyboardMarkup, parse_mode: str = 'HTML', chunk_size: int = 4096):
+    if len(text) <= chunk_size:
+        bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=markup, protect_content=True)
+    else:
+        new_text = split_string(text=text, chars_per_string=chunk_size)
+        for i in range(len(new_text)-1):
+            bot.send_message(chat_id=chat_id, text=new_text[i], parse_mode=parse_mode, protect_content=True)
+        bot.send_message(chat_id=chat_id, text=new_text[-1], parse_mode=parse_mode, reply_markup=markup, protect_content=True)
+
 
 def add_user_via_id(message):
     id = message.from_user.id
@@ -79,7 +88,7 @@ def add_user_via_id(message):
     if len(user_id) > 52 or not str(user_id).isdigit():
         text = 'К сожалению, Telegram ID пользователя не выглядит валидным. Мы не можем добавить такого пользователя'
         bot.send_message(chat_id=id, text=text, reply_markup=add_user_markup(), protect_content=True)
-        return 
+        return
     cursor.execute('SELECT telegram_id FROM Users WHERE telegram_id=?', (user_id,))
     data = cursor.fetchall()
     if len(data):
@@ -162,7 +171,7 @@ def view_my_links(query):
     elif not keys:
         text += 'У вас нет ключей <i>(ссылка не работает без привязки к ключу)</i>\n'
     else:
-        text += 'Сейчас ссылка не привязана ни к одному из ваших ключей <i>(cсылка не работает без привязки к ключу)</i>\n'
+        text += 'Сейчас ссылка не привязана ни к одному из Ваших ключей <i>(cсылка не работает без привязки к ключу)</i>\n'
     prefix = data[0][2]
     if prefix is not None:
         text += 'Используется префикс вида <code>' + prefix + '</code>'
@@ -277,7 +286,7 @@ def view_users(query):
         keys_len = len(keys)
         if keys_len:
             text += ', ключи:'
-            for i in range(len(keys)):
+            for i in range(keys_len):
                 text += ' <code>' + str(keys[i][0]) + '</code>'
                 if i != keys_len - 1:
                     text += ','
@@ -290,14 +299,39 @@ def view_users(query):
     markup.add(add_button, menu_button)
     id = query.from_user.id
     bot.delete_message(chat_id=id, message_id=query.message.id)
-    chunk_size = 4096
-    if len(text) <= chunk_size:
-        bot.send_message(chat_id=id, text=text, parse_mode='HTML', reply_markup=markup, protect_content=True)
-    else:
-        new_text = split_string(text=text, chars_per_string=chunk_size)
-        for i in range(len(new_text)-1):
-            bot.send_message(chat_id=id, text=new_text[i], parse_mode='HTML', protect_content=True)
-        bot.send_message(chat_id=id, text=new_text[-1], parse_mode='HTML', reply_markup=markup, protect_content=True)
+    split_send(text=text, chat_id=id, markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: f.data == 'view_my_keys')
+def view_my_keys(query):
+    id = query.from_user.id
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    cursor.execute('SELECT key_id FROM Ownership WHERE user_id=?', (id,))
+    keys = [key[0] for key in cursor.fetchall()]
+    cursor.execute('SELECT prefix FROM Links WHERE user_id=?', (id,))
+    prefix = cursor.fetchall()[0][0]
+    if not keys:
+        text = 'Вы не владеете ни одним ключом'
+        key_button = types.InlineKeyboardButton(text='Получить ключ', callback_data='get_new_key')
+        markup.add(key_button, menu_button)
+        bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, reply_markup=markup)
+        return
+    text = 'Список Ваших ключей'
+    if prefix is not None:
+        text += f' (используется префикс <code>{prefix}</code>)'
+    text += ':\n'
+    for key_id in keys:
+        text += '\n'
+        cursor.execute('SELECT (access_url) FROM Keys WHERE internal_id=?', (key_id,))
+        access_url = cursor.fetchall()[0][0]
+        text += f'• Ключ <code>{key_id}</code>:\nСсылка ключа\n<pre>{access_url}</pre>\n'
+        if prefix is not None:
+            new_url = access_url + '&prefix=' + url_prefix(prefix)
+            text += f'Ссылка ключа с использованием действующего префикса\n<pre>{new_url}</pre>\n'
+    markup.add(menu_button)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    split_send(text=text, chat_id=id, markup=markup)
 
 
 # bot.infinity_polling()
