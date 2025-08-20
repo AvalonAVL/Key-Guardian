@@ -39,8 +39,8 @@ user_id TEXT NOT NULL,
 key_id INTEGER,
 link TEXT,
 prefix TEXT,
-FOREIGN KEY (user_id) REFERENCES Users (telegram_id),
-FOREIGN KEY (key_id) REFERENCES Keys (internal_id)
+FOREIGN KEY (user_id) REFERENCES Users (telegram_id) ON DELETE CASCADE,
+FOREIGN KEY (key_id) REFERENCES Keys (internal_id) ON DELETE CASCADE
 )
 ''')
 connection.commit()
@@ -50,8 +50,8 @@ CREATE TABLE IF NOT EXISTS Ownership (
 user_id TEXT,
 key_id INTEGER,
 PRIMARY KEY (user_id, key_id),
-FOREIGN KEY (user_id) REFERENCES Users (telegram_id),
-FOREIGN KEY (key_id) REFERENCES Keys (internal_id)
+FOREIGN KEY (user_id) REFERENCES Users (telegram_id) ON DELETE CASCADE,
+FOREIGN KEY (key_id) REFERENCES Keys (internal_id) ON DELETE CASCADE
 )       
 ''')
 connection.commit()

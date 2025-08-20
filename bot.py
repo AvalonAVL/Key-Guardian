@@ -2,7 +2,7 @@ from telebot import TeleBot, types
 from telebot.util import split_string, quick_markup
 from telebot.apihelper import ApiTelegramException
 from sqlite3 import connect
-from config import token, key_limit, create_dynamic_link, url_prefix
+from config import token, key_limit, create_dynamic_link, url_prefix, admin_id
 
 bot = TeleBot(str(token))
 
@@ -158,6 +158,34 @@ def add_user_menu(query):
     message = bot.send_message(chat_id=id, text='Введите Telegram ID пользователя, которого хотите добавить', protect_content=True)
     bot.delete_message(chat_id=id, message_id=query.message.id)
     bot.register_next_step_handler(message, add_user_via_id)
+
+
+@bot.callback_query_handler(func=lambda f: 'delete_user' in f.data)
+def delete_user(query):
+    id = query.from_user.id
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    users_button = types.InlineKeyboardButton(text='Список пользователей', callback_data='view_users')
+    if len(query.data.split()) > 1:
+        user_id = query.data.split()[1]
+        text = f'Удален пользователь с Telegram ID: <code>{user_id}</code>'
+        cursor.execute('DELETE FROM Users WHERE telegram_id=?', (user_id,))
+        connection.commit()
+    else:
+        cursor.execute('SELECT telegram_id FROM Users')
+        users = [user[0] for user in cursor.fetchall()]
+        users.remove(admin_id)
+        if not users:
+            text = 'Нет пользоваталей для удаления'
+            markup.add(users_button, menu_button)
+            bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
+            return
+        users.sort()
+        buttons = [types.InlineKeyboardButton(text=str(users[i]), callback_data='delete_user '+str(users[i])) for i in range(len(users))]
+        markup = add_rowed_buttons(buttons=buttons, markup=markup)
+        text = 'Выберите пользователя, которого хотите удалить:'
+    markup.add(users_button, menu_button)
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
 
 
 @bot.callback_query_handler(func=lambda f: f.data == 'my_dynamic_link')
@@ -372,6 +400,24 @@ def view_all_keys(query):
     add_button = types.InlineKeyboardButton(text='Добавить владельца', callback_data='add_owner')
     delete_button = types.InlineKeyboardButton(text='Удалить владельца', callback_data='delete_owner')
     markup.add(add_button, delete_button, menu_button)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    split_send(text=text, chat_id=id, markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: f.data == 'view_all_links')
+def view_all_links(query):
+    id = query.from_user.id
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    cursor.execute('SELECT internal_id, user_id, key_id, link, prefix FROM Links')
+    links = cursor.fetchall()
+    text = 'Список всех динамических ссылок:\n'
+    for link in links:
+        text += '\n'
+        text += f'ID ссылки: <code>{link[0]}</code>\nID пользователя: <code>{link[1]}</code>\n'
+        text += f'ID подключенного ключа: <code>{link[2]}</code>\n'
+        text += f'Ссылка: <code>{link[3]}</code>\nПрефикс: <code>{link[4]}</code>\n'
+    markup.add(menu_button)
     bot.delete_message(chat_id=id, message_id=query.message.id)
     split_send(text=text, chat_id=id, markup=markup)
 
