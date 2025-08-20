@@ -34,6 +34,13 @@ def admin_menu_markup():
     }, row_width=2)
     return markup
 
+def add_rowed_buttons(buttons: list, markup: types.InlineKeyboardMarkup):
+    row_width = markup.row_width
+    rowed_buttons = [buttons[i:i+row_width] for i in range(0, len(buttons), row_width)]
+    for row in rowed_buttons:
+        markup.add(*row)
+    return markup
+
 def choose_prefix_markup(exclusion: str):
     markup = types.InlineKeyboardMarkup(row_width=2)
     no_prefix = types.InlineKeyboardButton(text='Не использовать префикс', callback_data='set_prefix None')
@@ -53,9 +60,7 @@ def choose_prefix_markup(exclusion: str):
     values = list(prefixes.values())
     values.append(what_button)
     values.append(menu_button)
-    buttons = [values[i:i+2] for i in range(0, len(values), 2)]
-    for row in buttons:
-        markup.add(*row)
+    markup = add_rowed_buttons(buttons=values, markup=markup)
     return markup
 
 def add_user_markup():
@@ -95,9 +100,10 @@ def add_user_via_id(message):
         text = 'Пользователь с данным Telegram ID уже есть в базе'
         bot.send_message(chat_id=id, text=text, reply_markup=add_user_markup(), protect_content=True)
         return
-    markup = types.InlineKeyboardMarkup()
+    markup = types.InlineKeyboardMarkup(row_width=2)
     menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
-    markup.add(menu_button)
+    users_button = types.InlineKeyboardButton(text='Список пользователей', callback_data='view_users')
+    markup.add(users_button, menu_button)
     if not user_available:
         text = 'Успешно добавлен пользователь с id: <code>' + user_id + '</code>'
         cursor.execute('INSERT INTO Users (telegram_id) VALUES (?)', (user_id,))
@@ -214,9 +220,7 @@ def connect_my_link(query):
     else:
         text = 'Динамическая ссылка привязана к ключу с id: <code>' + str(link_key) + '</code>\n'
     text += 'Вы можете привязать ссылку к ключу, выбрав нужную кнопку'
-    rowed_buttons = [buttons[i:i+3] for i in range(0, len(buttons), 3)]
-    for row in rowed_buttons:
-        markup.add(*row)
+    markup = add_rowed_buttons(buttons=buttons, markup=markup)
     menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
     link_button = types.InlineKeyboardButton(text='Посмотреть ссылку', callback_data='my_dynamic_link')
     markup.add(link_button, menu_button)
@@ -370,6 +374,86 @@ def view_all_keys(query):
     markup.add(add_button, delete_button, menu_button)
     bot.delete_message(chat_id=id, message_id=query.message.id)
     split_send(text=text, chat_id=id, markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: 'add_owner' in f.data)
+def add_owner(query):
+    id = query.from_user.id
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    view_keys_button = types.InlineKeyboardButton(text='Список ключей', callback_data='view_all_keys')
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if len(query.data.split()) == 2:
+        key_id = query.data.split()[1]
+        cursor.execute('SELECT telegram_id FROM Users')
+        users = [user[0] for user in cursor.fetchall()]
+        cursor.execute('SELECT user_id FROM Ownership WHERE key_id=?', (key_id,))
+        current_owners = [owner[0] for owner in cursor.fetchall()]
+        for owner in current_owners:
+            users.remove(owner)
+        if not users:
+            text = 'Нет свободных пользователей для добавления'
+            markup.add(view_keys_button, menu_button)
+            bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
+            return
+        users.sort()
+        buttons = [types.InlineKeyboardButton(text=users[i],callback_data=query.data+' '+users[i]) for i in range(len(users))]
+        text = 'Выберите пользователя для добавления:'
+        markup = add_rowed_buttons(buttons=buttons, markup=markup)
+    elif len(query.data.split()) == 3:
+        data = query.data.split()
+        key_id = data[1]
+        user_id = data[2]
+        text = f'Для ключа с ID <code>{key_id}</code> добавлен владелец <code>{user_id}</code>'
+        cursor.execute('INSERT OR IGNORE INTO Ownership (user_id, key_id) VALUES (?, ?)', (user_id, key_id))
+        connection.commit()
+    else:
+        markup.row_width = 3
+        cursor.execute('SELECT internal_id FROM Keys')
+        keys = [key[0] for key in cursor.fetchall()]
+        keys.sort()
+        buttons = [types.InlineKeyboardButton(text=str(keys[i]), callback_data='add_owner '+str(keys[i])) for i in range(len(keys))]
+        text = 'Выберите ключ, для которого хотите добавить владельца:'
+        markup = add_rowed_buttons(buttons=buttons, markup=markup)
+    markup.add(view_keys_button, menu_button)
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: 'delete_owner' in f.data)
+def delete_owner(query):
+    id = query.from_user.id
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    view_keys_button = types.InlineKeyboardButton(text='Список ключей', callback_data='view_all_keys')
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if len(query.data.split()) == 2:
+        key_id = query.data.split()[1]
+        cursor.execute('SELECT user_id FROM Ownership WHERE key_id=?', (key_id,))
+        users = [owner[0] for owner in cursor.fetchall()]
+        users.sort()
+        buttons = [types.InlineKeyboardButton(text=users[i],callback_data=query.data+' '+users[i]) for i in range(len(users))]
+        text = 'Выберите пользователя для удаления:'
+        markup = add_rowed_buttons(buttons=buttons, markup=markup)
+    elif len(query.data.split()) == 3:
+        data = query.data.split()
+        key_id = data[1]
+        user_id = data[2]
+        text = f'Для ключа с ID <code>{key_id}</code> удален владелец <code>{user_id}</code>\n'
+        cursor.execute('DELETE FROM Ownership WHERE user_id=? AND key_id=?', (user_id, key_id))
+        cursor.execute('SELECT key_id FROM Links WHERE user_id=?', (user_id,))
+        res = cursor.fetchall()
+        if str(res[0][0]) == key_id:
+            cursor.execute('UPDATE Links SET key_id=? WHERE user_id=?', (None, user_id,))
+            text += 'Ключ отвязан от динамической ссылки пользователя'
+        connection.commit()
+    else:
+        markup.row_width = 3
+        cursor.execute('SELECT DISTINCT key_id FROM Ownership')
+        keys = [key[0] for key in cursor.fetchall()]
+        keys.sort()
+        buttons = [types.InlineKeyboardButton(text=str(keys[i]), callback_data='delete_owner '+str(keys[i])) for i in range(len(keys))]
+        text = 'Выберите ключ, для которого хотите удалить владельца:'
+        markup = add_rowed_buttons(buttons=buttons, markup=markup)
+    markup.add(view_keys_button, menu_button)
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
 
 
 # bot.infinity_polling()
