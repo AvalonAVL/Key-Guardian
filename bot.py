@@ -13,25 +13,25 @@ connection.commit()
 
 
 def user_menu_markup():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    button1 = types.InlineKeyboardButton(text='Получить новый ключ', callback_data='get_new_key')
-    button2 = types.InlineKeyboardButton(text='Посмотреть мои ключи', callback_data='view_my_keys')
-    button3 = types.InlineKeyboardButton(text='Моя динамическая ссылка', callback_data='my_dynamic_link')
-    button4 = types.InlineKeyboardButton(text='Настроить префикс', callback_data='set_prefix')
-    markup.add(button1, button2, button3, button4)
+    markup = quick_markup({
+        'Получить новый ключ': {'callback_data': 'get_new_key'},
+        'Посмотреть мои ключи': {'callback_data': 'view_my_keys'},
+        'Моя динамическая ссылка': {'callback_data': 'my_dynamic_link'},
+        'Настроить префикс': {'callback_data': 'set_prefix'}
+    }, row_width=2)
     return markup
 
 def admin_menu_markup():
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    button1 = types.InlineKeyboardButton(text='Список пользователей', callback_data='view_users')
-    button2 = types.InlineKeyboardButton(text='Владение ключами', callback_data='view_key_ownership')
-    button3 = types.InlineKeyboardButton(text='Получить новый ключ', callback_data='get_new_key')
-    button4 = types.InlineKeyboardButton(text='Посмотреть мои ключи', callback_data='view_my_keys')
-    button5 = types.InlineKeyboardButton(text='Посмотреть все ключи', callback_data='view_all_keys')
-    button6 = types.InlineKeyboardButton(text='Моя динамическая ссылка', callback_data='my_dynamic_link')
-    button7 = types.InlineKeyboardButton(text='Посмотреть все ссылки', callback_data='view_all_links')
-    button8 = types.InlineKeyboardButton(text='Настроить префикс', callback_data='set_prefix')
-    markup.add(button1, button2, button3, button4, button5, button6, button7, button8)
+    markup = quick_markup({
+        'Список пользователей': {'callback_data': 'view_users'},
+        'Добавить пользователя': {'callback_data': 'add_user'},
+        'Получить новый ключ': {'callback_data': 'get_new_key'},
+        'Посмотреть мои ключи': {'callback_data': 'view_my_keys'},
+        'Посмотреть все ключи': {'callback_data': 'view_all_keys'},
+        'Моя динамическая ссылка': {'callback_data': 'my_dynamic_link'},
+        'Посмотреть все ссылки': {'callback_data': 'view_all_links'},
+        'Настроить префикс': {'callback_data': 'set_prefix'},
+    }, row_width=2)
     return markup
 
 def choose_prefix_markup(exclusion: str):
@@ -266,7 +266,7 @@ def view_users(query):
     data = (query.from_user.username, query.from_user.first_name, query.from_user.last_name, query.from_user.id)
     cursor.execute('UPDATE Users SET username=?, first_name=?, last_name=? WHERE telegram_id=?', data)
     connection.commit()
-    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup = types.InlineKeyboardMarkup(row_width=2)
     cursor.execute('SELECT telegram_id, username, first_name, last_name, is_admin FROM Users')
     data = cursor.fetchall()
     text = 'Список пользователей:\n'
@@ -291,12 +291,13 @@ def view_users(query):
                 if i != keys_len - 1:
                     text += ','
         text += '\n'
-    if len(data) > 1:
-        button = types.InlineKeyboardButton(text='Удалить пользователя', callback_data='delete_user')
-        markup.add(button)
     add_button = types.InlineKeyboardButton(text='Добавить пользователя', callback_data='add_user')
     menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
-    markup.add(add_button, menu_button)
+    if len(data) > 1:
+        delete_button = types.InlineKeyboardButton(text='Удалить пользователя', callback_data='delete_user')
+        markup.add(add_button, delete_button, menu_button)
+    else:
+        markup.add(add_button, menu_button)
     id = query.from_user.id
     bot.delete_message(chat_id=id, message_id=query.message.id)
     split_send(text=text, chat_id=id, markup=markup)
@@ -325,11 +326,48 @@ def view_my_keys(query):
         text += '\n'
         cursor.execute('SELECT (access_url) FROM Keys WHERE internal_id=?', (key_id,))
         access_url = cursor.fetchall()[0][0]
-        text += f'• Ключ <code>{key_id}</code>:\nСсылка ключа\n<pre>{access_url}</pre>\n'
+        text += f'• ID ключа: <code>{key_id}</code>\nСсылка ключа\n<pre>{access_url}</pre>\n'
         if prefix is not None:
             new_url = access_url + '&prefix=' + url_prefix(prefix)
             text += f'Ссылка ключа с использованием действующего префикса\n<pre>{new_url}</pre>\n'
     markup.add(menu_button)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    split_send(text=text, chat_id=id, markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: f.data == 'view_all_keys')
+def view_all_keys(query):
+    id = query.from_user.id
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    cursor.execute('SELECT internal_id, key_id, server, name, password, server_port, method, access_url FROM Keys')
+    keys = cursor.fetchall()
+    if not keys:
+        text = 'В базе нет ключей'
+        markup.add(menu_button)
+        bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, reply_markup=markup)
+        return
+    text = 'Список всех ключей:\n'
+    for key in keys:
+        text += '\n'
+        internal_id = key[0]
+        cursor.execute('SELECT user_id FROM Ownership WHERE key_id=?', (internal_id,))
+        owners = cursor.fetchall()
+        text += f'Ключ <code>{internal_id}</code>:\nID ключа Outline: <code>{key[1]}</code>\nСервер: <code>{key[2]}</code>\n'
+        text += f'Имя: <code>{key[3]}</code>\nПароль: <code>{key[4]}</code>\nПорт: <code>{key[5]}</code>\n'
+        text += f'Метод шифрования: <code>{key[6]}</code>\nСсылка: <code>{key[7]}</code>\nВладельцы:'
+        if owners:
+            len_owners = len(owners)
+            for i in range(len_owners):
+                text += f' <code>{owners[i][0]}</code>'
+                if i != len_owners - 1:
+                    text += ','
+        else:
+            text += ' <code>отсутствуют</code>'
+        text += '\n'
+    add_button = types.InlineKeyboardButton(text='Добавить владельца', callback_data='add_owner')
+    delete_button = types.InlineKeyboardButton(text='Удалить владельца', callback_data='delete_owner')
+    markup.add(add_button, delete_button, menu_button)
     bot.delete_message(chat_id=id, message_id=query.message.id)
     split_send(text=text, chat_id=id, markup=markup)
 
