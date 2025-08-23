@@ -1,58 +1,132 @@
 from decouple import config
 from outline_vpn.outline_vpn import OutlineVPN
-from urllib.parse import quote
 
-def gb_to_bytes(gb: float):
+
+def gb_to_bytes(gb: int | None):
     if gb is not None:
-        bytes_in_gb = 1024 ** 3  
+        bytes_in_gb = 1000 ** 3  
         return int(gb * bytes_in_gb)
     else:
         return None
 
-def get_keys():
-    return client.get_keys()
 
-def get_key_info(key_id: str):
-    return client.get_key(key_id)
+def get_keys(timeout: int | None = None):
+    if timeout is None:
+        return client.get_keys()
+    else:
+        return client.get_keys(timeout=timeout)
 
-def create_new_key(key_id: str = None, name: str = None, data_limit_gb: float = None): # type: ignore
-    return client.create_key(key_id=key_id, name=name, data_limit=gb_to_bytes(data_limit_gb))
 
-def rename_key(key_id: str, new_key_name: str):
-    return client.rename_key(key_id, new_key_name)
+def get_key(key_id: str, timeout: int | None = None):
+    if timeout is None:
+        return client.get_key(key_id=key_id)
+    else:
+        return client.get_key(key_id=key_id, timeout=timeout)
 
-def upd_limit(key_id: str, data_limit_gb: float):
-    return client.add_data_limit(key_id, gb_to_bytes(data_limit_gb))
 
-def delete_limit(key_id: str):
-    return client.delete_data_limit(key_id)
+def create_key(key_id: str | None = None, name: str | None = None,
+               method: str | None = None, password: str | None = None,
+               data_limit_gb: int | None = None, port: int | None = None,
+               timeout: int | None = None):
+    return client.create_key(key_id=key_id, name=name, method=method, # type: ignore
+                             password=password, data_limit=gb_to_bytes(data_limit_gb), # type: ignore
+                             port=port, timeout=timeout) # type: ignore
 
-def delete_key(key_id: str):
-    return client.delete_key(key_id)
 
-def get_service_info():
-    return client.get_server_information()
+def rename_key(key_id: str, new_name: str, timeout: int | None = None):
+    if timeout is None:
+        return client.rename_key(key_id=key_id, name=new_name)
+    else:
+        return client.rename_key(key_id=key_id, name=new_name, timeout=timeout)
+
+
+def set_limit(key_id: str, new_limit_gb: int, timeout: int | None = None):
+        return client.add_data_limit(key_id=key_id, limit_bytes=gb_to_bytes(new_limit_gb), # type: ignore
+                                     timeout=timeout)  # type: ignore
+
+
+def delete_limit(key_id: str, timeout: int | None = None):
+    if timeout is None:
+        return client.delete_data_limit(key_id=key_id)
+    else:
+        return client.delete_data_limit(key_id=key_id, timeout=timeout)
+
+
+def delete_key(key_id: str, timeout: int | None = None):
+    if timeout is None:
+        return client.delete_key(key_id=key_id)
+    else:
+        return client.delete_key(key_id=key_id, timeout=timeout)
+
+
+def delete_limit_all_keys(timeout: int | None = None):
+    if timeout is None:
+        return client.delete_data_limit_for_all_keys()
+    else:
+        return client.delete_data_limit_for_all_keys(timeout=timeout)
+
+
+def set_limit_all_keys(limit_gb: int, timeout: int | None = None):
+    return client.set_data_limit_for_all_keys(limit_bytes=gb_to_bytes(limit_gb), # type: ignore
+                                              timeout=timeout) # type: ignore
+
+
+def get_all_transferred_data(timeout: int | None = None):
+    if timeout is None:
+        return client.get_transferred_data()
+    else:
+        return client.get_transferred_data(timeout=timeout)
+
+
+def get_metrics_status(timeout: int | None = None):
+    if timeout is None:
+        return client.get_metrics_status()
+    else:
+        return client.get_metrics_status(timeout=timeout)
+
+
+def get_server_info(timeout: int | None = None):
+    if timeout is None:
+        return client.get_server_information()
+    else:
+        return client.get_server_information(timeout=timeout)
+
+
+def set_hostname(hostname: str, timeout: int | None = None):
+    if timeout is None:
+        return client.set_hostname(hostname=hostname)
+    else:
+        return client.set_hostname(hostname=hostname, timeout=timeout)
+
+
+def set_metrics_status(status: bool, timeout: int | None = None):
+    if timeout is None:
+        return client.set_metrics_status(status=status)
+    else:
+        return client.set_metrics_status(status=status, timeout=timeout)
+
+
+def set_port(port: int, timeout: int | None = None):
+    if timeout is None:
+        return client.set_port_new_for_access_keys(port=port)
+    else:
+        return client.set_port_new_for_access_keys(port=port, timeout=timeout)
+    
+
+def set_server_name(name: str, timeout: int | None = None):
+    if timeout is None:
+        return client.set_server_name(name=name)
+    else:
+        return client.set_server_name(name=name, timeout=timeout)
+    
 
 def create_dynamic_link(user_id: str, conn_name: str ='connect'):
     id = int(user_id)
     return f"{gateway}/conf/{salt}{hex(id)}#{conn_name}"
 
-def url_prefix(prefix: str):
-    prefixes = {'HTTP-запрос': 'POST%20', 'HTTP-ответ': 'HTTP%2F1.1%20', 'DNS-over-TCP-запрос': '%05%C3%9C_%C3%A0%01%20',
-                'TLS ClientHello': '%16%03%01%00%C2%A8%01%01', 'TLS Application Data': '%13%03%03%3F',
-                'TLS ServerHello' : '%16%03%03%40%00%02', 'SSH': 'SSH-2.0%0D%0A'}
-    if prefix in list(prefixes.keys()):
-        return prefixes[prefix]
-    else:
-        return quote(string=prefix, encoding='utf-8')
 
-
-api_url = config('API_URL')
-cert_sha256 = config('CERT_SHA')
-token = config('BOT_TOKEN')
 gateway = str(config('OUTLINE_USERS_GATEWAY'))
 salt = str(config('OUTLINE_SALT'))
 admin_id = str(config('ADMIN_ID'))
-key_limit = str(config('KEY_LIMIT'))
 
-client = OutlineVPN(api_url=str(api_url), cert_sha256=str(cert_sha256))
+client = OutlineVPN(api_url=str(config('API_URL')), cert_sha256=str(config('CERT_SHA')))

@@ -1,5 +1,5 @@
 from sqlite3 import connect
-from config import get_keys, get_service_info, create_dynamic_link, admin_id
+from config import get_keys, get_server_info, create_dynamic_link, admin_id
 
 
 connection = connect('storage.db', check_same_thread=False)
@@ -40,7 +40,7 @@ key_id INTEGER,
 link TEXT,
 prefix TEXT,
 FOREIGN KEY (user_id) REFERENCES Users (telegram_id) ON DELETE CASCADE,
-FOREIGN KEY (key_id) REFERENCES Keys (internal_id) ON DELETE CASCADE
+FOREIGN KEY (key_id) REFERENCES Keys (internal_id) ON DELETE SET NULL
 )
 ''')
 connection.commit()
@@ -61,7 +61,7 @@ cursor.execute('INSERT INTO Links (user_id, link) VALUES (?, ?)', (admin_id, cre
 connection.commit()
 
 keys = get_keys()
-server = get_service_info()['hostnameForAccessKeys']
+server = get_server_info()['hostnameForAccessKeys']
 key_req = 'INSERT INTO Keys (key_id, server, name, password, server_port, method, access_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
 for key in keys:
     key_data = (key.key_id, server, key.name, key.password, key.port, key.method, key.access_url)

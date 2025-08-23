@@ -1,10 +1,13 @@
 from telebot import TeleBot, types
-from telebot.util import split_string, quick_markup
+from telebot.util import quick_markup, smart_split
 from telebot.apihelper import ApiTelegramException
 from sqlite3 import connect
-from config import token, key_limit, create_dynamic_link, url_prefix, admin_id
+from config import create_dynamic_link, admin_id, create_key, get_server_info
+from decouple import config
+from urllib.parse import quote
 
-bot = TeleBot(str(token))
+
+bot = TeleBot(str(config('BOT_TOKEN')))
 
 connection = connect('storage.db', check_same_thread=False)
 cursor = connection.cursor()
@@ -33,6 +36,23 @@ def admin_menu_markup():
         'Настроить префикс': {'callback_data': 'set_prefix'},
     }, row_width=2)
     return markup
+
+def not_authed_response(user_id: str):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    button = types.KeyboardButton(text='/auth')
+    markup.add(button)
+    bot.send_message(user_id, text='Вы не обнаружены в списке разрешенных пользователей. ' \
+    'Если Вы считаете, что произошла ошибка, обратитесь к администратору сервиса. Ваш идентификатор: <code>%s</code>\nЧтобы ' \
+    'авторизоваться снова, нажмите кнопку внизу или введите команду <code>/auth</code>' % (user_id), 
+    parse_mode='HTML', reply_markup=markup)
+
+def security_check(user_id: str):
+    cursor.execute('SELECT telegram_id FROM Users WHERE telegram_id=?', (user_id,))
+    if not cursor.fetchall():
+        not_authed_response(user_id=user_id)
+        return False
+    else:
+        return True
 
 def add_rowed_buttons(buttons: list, markup: types.InlineKeyboardMarkup):
     row_width = markup.row_width
@@ -74,10 +94,58 @@ def split_send(text: str, chat_id: str, markup: types.InlineKeyboardMarkup, pars
     if len(text) <= chunk_size:
         bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode, reply_markup=markup, protect_content=True)
     else:
-        new_text = split_string(text=text, chars_per_string=chunk_size)
+        new_text = smart_split(text=text, chars_per_string=chunk_size)
         for i in range(len(new_text)-1):
             bot.send_message(chat_id=chat_id, text=new_text[i], parse_mode=parse_mode, protect_content=True)
         bot.send_message(chat_id=chat_id, text=new_text[-1], parse_mode=parse_mode, reply_markup=markup, protect_content=True)
+
+def url_prefix(prefix: str):
+    prefixes = {'HTTP-запрос': 'POST%20', 'HTTP-ответ': 'HTTP%2F1.1%20', 'DNS-over-TCP-запрос': '%05%C3%9C_%C3%A0%01%20',
+                'TLS ClientHello': '%16%03%01%00%C2%A8%01%01', 'TLS Application Data': '%13%03%03%3F',
+                'TLS ServerHello' : '%16%03%03%40%00%02', 'SSH': 'SSH-2.0%0D%0A'}
+    if prefix in list(prefixes.keys()):
+        return prefixes[prefix]
+    else:
+        return quote(string=prefix, encoding='utf-8')
+
+
+@bot.message_handler(commands=['start', 'auth'])
+def start(message):
+    id = message.from_user.id
+    cursor.execute('SELECT is_admin FROM Users WHERE telegram_id=?', (id,))
+    res = cursor.fetchall()
+    if not len(res):
+        not_authed_response(id)
+        return
+    elif res[0][0]:
+        markup = admin_menu_markup()
+        bot.send_message(id, text='All hail Lord Avalon! Что желаете совершить сегодня?', reply_markup=markup, protect_content=True)
+    else:
+        markup = user_menu_markup()
+        bot.send_message(id, text='Вы успешно авторизовались! Выберите, что хотите сделать', reply_markup=markup, protect_content=True)
+    data = (message.from_user.username, message.from_user.first_name, message.from_user.last_name, id)
+    cursor.execute('UPDATE Users SET username=?, first_name=?, last_name=? WHERE telegram_id=?', data)
+    connection.commit()
+
+
+@bot.callback_query_handler(func=lambda f: f.data == 'menu')
+def menu(query):
+    id = query.from_user.id
+    cursor.execute('SELECT is_admin FROM Users WHERE telegram_id=?', (id,))
+    res = cursor.fetchall()
+    if res[0][0]:
+        markup = admin_menu_markup()
+    else:
+        markup = user_menu_markup()
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text='С возвращением в меню! Выберите действие:', reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: f.data == 'add_user')
+def add_user_menu(query):
+    id = query.from_user.id
+    message = bot.send_message(chat_id=id, text='Введите Telegram ID пользователя, которого хотите добавить', protect_content=True)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    bot.register_next_step_handler(message, add_user_via_id)
 
 
 def add_user_via_id(message):
@@ -115,51 +183,6 @@ def add_user_via_id(message):
     bot.send_message(chat_id=id, text=text, reply_markup=markup, parse_mode='HTML', protect_content=True)
 
 
-@bot.message_handler(commands=['start', 'auth'])
-def start(message):
-    id = message.from_user.id
-    cursor.execute('SELECT is_admin FROM Users WHERE telegram_id=?', (id,))
-    res = cursor.fetchall()
-    if not len(res):
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        button = types.KeyboardButton(text='/auth')
-        markup.add(button)
-        bot.send_message(id, text='Вы не обнаружены в списке разрешенных пользователей. ' \
-        'Если Вы считаете, что произошла ошибка, обратитесь к администратору сервиса. Ваш идентификатор: <code>%s</code>\nЧтобы ' \
-        'авторизоваться снова, нажмите кнопку внизу сообщения или введите команду <code>/auth</code>' % (id), 
-        parse_mode='HTML', reply_markup=markup)
-        return
-    elif res[0][0]:
-        markup = admin_menu_markup()
-        bot.send_message(id, text='All hail Lord Avalon! Что желаете совершить сегодня?', reply_markup=markup, protect_content=True)
-    else:
-        markup = user_menu_markup()
-        bot.send_message(id, text='Вы успешно авторизовались! Выберите, что хотите сделать', reply_markup=markup, protect_content=True)
-    data = (message.from_user.username, message.from_user.first_name, message.from_user.last_name, id)
-    cursor.execute('UPDATE Users SET username=?, first_name=?, last_name=? WHERE telegram_id=?', data)
-    connection.commit()
-
-
-@bot.callback_query_handler(func=lambda f: f.data == 'menu')
-def menu(query):
-    id = query.from_user.id
-    cursor.execute('SELECT is_admin FROM Users WHERE telegram_id=?', (id,))
-    res = cursor.fetchall()
-    if res[0][0]:
-        markup = admin_menu_markup()
-    else:
-        markup = user_menu_markup()
-    bot.edit_message_text(chat_id=id, message_id=query.message.id, text='С возвращением в меню! Выберите действие:', reply_markup=markup)
-
-
-@bot.callback_query_handler(func=lambda f: f.data == 'add_user')
-def add_user_menu(query):
-    id = query.from_user.id
-    message = bot.send_message(chat_id=id, text='Введите Telegram ID пользователя, которого хотите добавить', protect_content=True)
-    bot.delete_message(chat_id=id, message_id=query.message.id)
-    bot.register_next_step_handler(message, add_user_via_id)
-
-
 @bot.callback_query_handler(func=lambda f: 'delete_user' in f.data)
 def delete_user(query):
     id = query.from_user.id
@@ -190,8 +213,10 @@ def delete_user(query):
 
 @bot.callback_query_handler(func=lambda f: f.data == 'my_dynamic_link')
 def view_my_links(query):
-    markup = types.InlineKeyboardMarkup(row_width=2)
     id = query.from_user.id
+    if not security_check(id):
+        return
+    markup = types.InlineKeyboardMarkup(row_width=2)
     cursor.execute('SELECT link, key_id, prefix FROM Links WHERE user_id=?', (id,))
     data = cursor.fetchall()
     cursor.execute('SELECT COUNT (key_id) FROM Ownership WHERE user_id=?', (id,))
@@ -229,6 +254,8 @@ def view_my_links(query):
 @bot.callback_query_handler(func=lambda f: 'connect_my_link' in f.data)
 def connect_my_link(query):
     id = query.from_user.id
+    if not security_check(id):
+        return
     cursor.execute('SELECT key_id FROM Ownership WHERE user_id=?', (id,))
     keys = [key[0] for key in cursor.fetchall()]
     if len(query.data.split()) > 1:
@@ -258,6 +285,8 @@ def connect_my_link(query):
 @bot.callback_query_handler(func=lambda f: f.data == 'wtf_is_prefix')
 def wtf_is_prefix(query):
     id = query.from_user.id
+    if not security_check(id):
+        return
     markup = types.InlineKeyboardMarkup(row_width=2)
     text = 'Префикс — это список байтов, благодаря которым подключение выглядит как протокол, разрешенный в сети, ' \
     'и обходит брандмауэры, которые блокируют нераспознанные протоколы. ' \
@@ -272,6 +301,8 @@ def wtf_is_prefix(query):
 @bot.callback_query_handler(func=lambda f: 'set_prefix' in f.data)
 def set_prefix(query):
     id = query.from_user.id
+    if not security_check(id):
+        return
     if len(query.data.split()) > 1:
         prefix = query.data.split()[1]
         prefixes = {'None': None, 'HTTP-req': 'HTTP-запрос', 'HTTP-res': 'HTTP-ответ', 'dns': 'DNS-over-TCP-запрос', 
@@ -338,6 +369,8 @@ def view_users(query):
 @bot.callback_query_handler(func=lambda f: f.data == 'view_my_keys')
 def view_my_keys(query):
     id = query.from_user.id
+    if not security_check(id):
+        return
     markup = types.InlineKeyboardMarkup(row_width=2)
     menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
     cursor.execute('SELECT key_id FROM Ownership WHERE user_id=?', (id,))
@@ -402,6 +435,130 @@ def view_all_keys(query):
     markup.add(add_button, delete_button, menu_button)
     bot.delete_message(chat_id=id, message_id=query.message.id)
     split_send(text=text, chat_id=id, markup=markup)
+
+
+def create_new_key(user_id: str | int, name: str, key_id: str | None = None,
+                   data_limit_gb: int | None = int(config('DATA_LIMIT'))):
+    user_id = str(user_id)
+    key = create_key(name=name, key_id=key_id, data_limit_gb=data_limit_gb)
+    server = get_server_info()['hostnameForAccessKeys']
+    key_req = 'INSERT INTO Keys (key_id, server, name, password, server_port, method, access_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    key_data = (key.key_id, server, key.name, key.password, key.port, key.method, key.access_url)
+    cursor.execute(key_req, key_data)
+    cursor.execute('SELECT internal_id FROM Keys WHERE key_id=?', (key.key_id,))
+    internal_id = cursor.fetchall()[0][0]
+    cursor.execute('INSERT INTO Ownership (user_id, key_id) VALUES (?, ?)', (user_id, internal_id))
+    text = f'Создан новый ключ с ID <code>{internal_id}</code>\n'
+    cursor.execute('SELECT key_id FROM Links WHERE user_id=?', (user_id,))
+    link_key_id = cursor.fetchall()[0][0]
+    if link_key_id is None:
+        cursor.execute('UPDATE Links SET key_id=? WHERE user_id=?', (internal_id, user_id))
+        text += 'Динамическая ссылка привязана к ключу\n'
+    connection.commit()
+    return (key, text)
+
+
+@bot.callback_query_handler(func=lambda f: f.data == 'get_new_key')
+def get_new_key(query):
+    id = query.from_user.id
+    if not security_check(id):
+        return
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    view_keys_button = types.InlineKeyboardButton(text='Мои ключи', callback_data='view_my_keys')
+    cursor.execute('SELECT is_admin FROM Users WHERE telegram_id=?', (id,))
+    is_admin = cursor.fetchall()[0][0]
+    if is_admin:
+        text = 'Выберите способ задания <code>OutlineKey</code>'
+        enter_button = types.InlineKeyboardButton(text='Ввести вручную', callback_data='enter_key_id')
+        default_button = types.InlineKeyboardButton(text='По умолчанию', callback_data='create_admin_key')
+        markup.add(enter_button, default_button, view_keys_button, menu_button)
+        bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
+        return
+    cursor.execute('SELECT COUNT (key_id) FROM Ownership WHERE user_id=?', (id,))
+    count = cursor.fetchall()[0][0]
+    key_limit = int(config('KEY_LIMIT'))
+    if count >= key_limit:
+        text = f'Достигнут лимит на количество ключей для Вашего аккаунта (<code>{key_limit}</code>)'
+        markup.add(menu_button)
+        bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
+        return
+    name = str(id) + '_' + str(count+1)
+    response_text = create_new_key(user_id=id, name=name)[1]
+    markup.add(view_keys_button, menu_button)
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text=response_text, parse_mode='HTML', reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: f.data == 'enter_key_id')
+def enter_key_id_menu(query):
+    id = query.from_user.id
+    text = 'Введите <code>key.id</code> нового ключа (<code>None</code> для автонумерации)'
+    message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    bot.register_next_step_handler(message, enter_key_id)
+
+def enter_key_id(message):
+    id = message.from_user.id
+    key_id = message.text
+    text = 'Введите <code>key.name</code> нового ключа'
+    message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
+    bot.register_next_step_handler(message, enter_key_name, kwargs={'key_id': key_id})
+
+def enter_key_name(message, **kwargs):
+    id = message.from_user.id
+    key_name = message.text
+    text = 'Введите <code>key.data_limit</code> нового ключа в гигабайтах (<code>None</code> для безлимита)'
+    message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
+    bot.register_next_step_handler(message, enter_key_limit, kwargs={'key_id': kwargs['kwargs']['key_id'],
+                                                                      'key_name': key_name})
+
+def enter_key_limit(message, **kwargs):
+    id = message.from_user.id
+    data_limit = str(message.text)
+    if not data_limit.isdigit() and data_limit.lower() != 'none':
+        text = 'Некорретный формат данных'
+        markup = quick_markup({'Вернуться в меню': {'callback_data': 'menu'}})
+        bot.send_message(chat_id=id, text=text, reply_markup=markup, protect_content=True)
+        return
+    kwargs = kwargs['kwargs']
+    kwargs['data_limit'] = data_limit
+    query = types.CallbackQuery(id=id, from_user=message.from_user, data='create_admin_key', chat_instance=id,
+                                json_string=kwargs)
+    create_admin_key(query=query)
+
+
+@bot.callback_query_handler(func=lambda f: f.data == 'create_admin_key')
+def create_admin_key(query):
+    id = query.from_user.id
+    if query.message is None:
+        key_id = str(query.json['key_id'])
+        if key_id.lower() == 'none':
+            key_id = None
+        key_name = str(query.json['key_name'])
+        data_limit = str(query.json['data_limit'])
+        if data_limit.lower() == 'none' or data_limit == '0':
+            data_limit = None
+        else:
+            data_limit = int(data_limit)
+    else:
+        bot.delete_message(chat_id=id, message_id=query.message.id)
+        cursor.execute('SELECT COUNT (key_id) FROM Ownership WHERE user_id=?', (id,))
+        count = cursor.fetchall()[0][0]
+        key_id = None
+        key_name = str(id) + '_' + str(count+1)
+        data_limit = None
+    data = create_new_key(user_id=id, name=key_name, key_id=key_id, data_limit_gb=data_limit)
+    key = data[0]
+    text = data[1]
+    markup = quick_markup({
+        'Мои ключи': {'callback_data': 'view_my_keys'},
+        'Все ключи': {'callback_data': 'view_all_keys'},
+        'Вернуться в меню': {'callback_data': 'menu'},
+        }, row_width=2)
+    text += f'ID ключа Outline: <code>{key.key_id}</code>\nИмя: <code>{key.name}</code>\n'
+    text += f'Лимит в ГБ: <code>{data_limit}</code>\nПароль: <code>{key.password}</code>\n'
+    text += f'Порт: <code>{key.port}</code>\nМетод шифрования: <code>{key.method}</code>\n'
+    bot.send_message(chat_id=id, text=text, parse_mode='HTML', reply_markup=markup, protect_content=True)
 
 
 @bot.callback_query_handler(func=lambda f: f.data == 'view_all_links')
