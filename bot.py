@@ -2,7 +2,7 @@ from telebot import TeleBot, types
 from telebot.util import quick_markup, smart_split
 from telebot.apihelper import ApiTelegramException
 from sqlite3 import connect
-from config import create_dynamic_link, admin_id, create_key, get_server_info, get_key
+from config import create_dynamic_link, admin_id, create_key, get_server_info, get_key, delete_key
 from decouple import config
 from urllib.parse import quote
 from math import log, floor
@@ -464,10 +464,39 @@ def view_all_keys(query):
     add_user_button = types.InlineKeyboardButton(text='Добавить владельца', callback_data='add_owner')
     delete_user_button = types.InlineKeyboardButton(text='Удалить владельца', callback_data='del_owner')
     add_key_button = types.InlineKeyboardButton(text='Создать ключ', callback_data='get_new_key')
-    delete_key_button = types.InlineKeyboardButton(text='Удалить ключ', callback_data='delete_key')
+    delete_key_button = types.InlineKeyboardButton(text='Удалить ключ', callback_data='del_key')
     markup.add(add_user_button, delete_user_button, add_key_button, delete_key_button, menu_button)
     bot.delete_message(chat_id=id, message_id=query.message.id)
     split_send(text=text, chat_id=id, markup=markup)
+
+
+@bot.callback_query_handler(func=lambda f: 'del_key' in f.data)
+def delete_key_multifunction(query):
+    id = query.from_user.id
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    view_keys_button = types.InlineKeyboardButton(text='Список ключей', callback_data='view_all_keys')
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if len(query.data.split()) > 1:
+        internal_id = query.data.split()[1]
+        cursor.execute('SELECT key_id FROM Keys WHERE internal_id=?', (internal_id,))
+        outline_id = cursor.fetchall()[0][0]
+        if delete_key(key_id=outline_id):
+            cursor.execute('DELETE FROM Keys WHERE internal_id=?', (internal_id,))
+            connection.commit()
+            text = f'Удален ключ с id: <code>{internal_id}</code>\n'
+        else:
+            text = f'При удалении ключа произошла ошибка\n'
+    else:
+        markup.row_width = 3
+        cursor.execute('SELECT internal_id, name FROM Keys')
+        keys = cursor.fetchall()
+        keys.sort(key=lambda f: f[0])
+        buttons = [types.InlineKeyboardButton(text=f'{str(keys[i][0])} ({keys[i][1]})', 
+                                              callback_data='del_key '+str(keys[i][0])) for i in range(len(keys))]
+        text = 'Выберите ключ, который хотите удалить\n\n<b>Внимание, это необратимо!</b>\n'
+        markup = add_rowed_buttons(buttons=buttons, markup=markup)
+    markup.add(view_keys_button, menu_button)
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)    
 
 
 def create_new_key(user_id: str | int, name: str, key_id: str | None = None,
