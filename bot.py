@@ -3,6 +3,7 @@ from telebot.util import quick_markup, smart_split
 from telebot.apihelper import ApiTelegramException
 from sqlite3 import connect
 from config import create_dynamic_link, admin_id, create_key, get_server_info, get_key, delete_key
+from config import set_limit, delete_limit, rename_key
 from decouple import config
 from urllib.parse import quote
 from math import log, floor
@@ -27,22 +28,22 @@ def convert_bytes(size_bytes: int | None):
 
 def user_menu_markup():
     markup = quick_markup({
-        'Получить новый ключ': {'callback_data': 'get_new_key'},
-        'Посмотреть мои ключи': {'callback_data': 'view_my_keys'},
-        'Моя динамическая ссылка': {'callback_data': 'my_dynamic_link'},
+        'Получить ключ': {'callback_data': 'get_new_key'},
+        'Мои ключи': {'callback_data': 'view_my_keys'},
+        'Моя ссылка': {'callback_data': 'my_dynamic_link'},
         'Настроить префикс': {'callback_data': 'set_prefix'}
     }, row_width=2)
     return markup
 
 def admin_menu_markup():
     markup = quick_markup({
-        'Список пользователей': {'callback_data': 'view_users'},
-        'Добавить пользователя': {'callback_data': 'add_user'},
-        'Получить новый ключ': {'callback_data': 'get_new_key'},
-        'Посмотреть мои ключи': {'callback_data': 'view_my_keys'},
-        'Посмотреть все ключи': {'callback_data': 'view_all_keys'},
-        'Моя динамическая ссылка': {'callback_data': 'my_dynamic_link'},
-        'Посмотреть все ссылки': {'callback_data': 'view_all_links'},
+        'Пользователи': {'callback_data': 'view_users'},
+        'Сервер': {'callback_data': 'server_settings'},
+        'Создать ключ': {'callback_data': 'get_new_key'},
+        'Мои ключи': {'callback_data': 'view_my_keys'},
+        'Все ключи': {'callback_data': 'view_all_keys'},
+        'Моя ссылка': {'callback_data': 'my_dynamic_link'},
+        'Все ссылки': {'callback_data': 'view_all_links'},
         'Настроить префикс': {'callback_data': 'set_prefix'},
     }, row_width=2)
     return markup
@@ -73,7 +74,7 @@ def add_rowed_buttons(buttons: list, markup: types.InlineKeyboardMarkup):
 
 def choose_prefix_markup(exclusion: str):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    no_prefix = types.InlineKeyboardButton(text='Не использовать префикс', callback_data='set_prefix None')
+    no_prefix = types.InlineKeyboardButton(text='Не использовать', callback_data='set_prefix None')
     http_request = types.InlineKeyboardButton(text='HTTP-запрос', callback_data='set_prefix HTTP-req')
     http_response = types.InlineKeyboardButton(text='HTTP-ответ', callback_data='set_prefix HTTP-res')
     dns = types.InlineKeyboardButton(text='DNS-over-TCP-запрос', callback_data='set_prefix dns')
@@ -98,6 +99,14 @@ def add_user_markup():
         'Попробовать снова': {'callback_data': 'add_user'},
         'Вернуться в меню': {'callback_data': 'menu'}
     }, row_width=2)
+    return markup
+
+def change_key_markup():
+    markup = quick_markup({
+        'Мои ключи': {'callback_data': 'view_my_keys'},
+        'Все ключи': {'callback_data': 'view_all_keys'},
+        'Вернуться в меню': {'callback_data': 'menu'},
+        }, row_width=2)
     return markup
 
 def split_send(text: str, chat_id: str | int, markup: types.InlineKeyboardMarkup,
@@ -465,13 +474,123 @@ def view_all_keys(query):
     delete_user_button = types.InlineKeyboardButton(text='Удалить владельца', callback_data='del_owner')
     add_key_button = types.InlineKeyboardButton(text='Создать ключ', callback_data='get_new_key')
     delete_key_button = types.InlineKeyboardButton(text='Удалить ключ', callback_data='del_key')
-    markup.add(add_user_button, delete_user_button, add_key_button, delete_key_button, menu_button)
+    key_settings_button = types.InlineKeyboardButton(text='Изменить ключ', callback_data='set_key')
+    markup.add(add_user_button, delete_user_button, add_key_button, delete_key_button, key_settings_button, menu_button)
     bot.delete_message(chat_id=id, message_id=query.message.id)
     split_send(text=text, chat_id=id, markup=markup)
 
 
+@bot.callback_query_handler(func=lambda f: 'set_key' in f.data)
+def key_settings(query):
+    id = query.from_user.id
+    menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
+    view_keys_button = types.InlineKeyboardButton(text='Список ключей', callback_data='view_all_keys')
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    if len(query.data.split()) > 1:
+        internal_id = query.data.split()[1]
+        cursor.execute('SELECT key_id, name FROM Keys WHERE internal_id=?', (internal_id,))
+        data = cursor.fetchall()[0]
+        outline_id = data[0]
+        name = data[1]
+        text = f'Ключ с ID: <code>{internal_id}</code>\nOutline ID: <code>{outline_id}</code>\n'
+        outline_key = get_key(key_id=outline_id)
+        used_bytes = convert_bytes(outline_key.used_bytes)
+        limit = convert_bytes(outline_key.data_limit)
+        text += f'Имя ключа: <code>{name}</code>\nИспользованный трафик: <code>{used_bytes}</code>\n'
+        text += f'Лимит трафика: <code>{limit}</code>\n'
+        rename_button = types.InlineKeyboardButton(text='Переименовать',
+                                                   callback_data='rename_key '+str(internal_id))
+        set_limit_button = types.InlineKeyboardButton(text='Установить лимит',
+                                                      callback_data='set_limit_key '+str(internal_id))
+        delete_key_button = types.InlineKeyboardButton(text='Удалить ключ',
+                                                       callback_data='del_key '+str(internal_id))
+        if outline_key.data_limit is not None:
+            delete_limit_buton = types.InlineKeyboardButton(text='Удалить лимит',
+                                                        callback_data='del_limit_key '+str(internal_id))
+            markup.add(rename_button, set_limit_button, delete_limit_buton, delete_key_button)
+        else:
+            markup.add(rename_button, set_limit_button, delete_key_button)
+    else:
+        markup.row_width = 3
+        cursor.execute('SELECT internal_id FROM Keys')
+        keys = [key[0] for key in cursor.fetchall()]
+        keys.sort()
+        text = 'Выберите ключ, для которого хотите изменить параметры\n'
+        buttons = [types.InlineKeyboardButton(text=str(keys[i]), callback_data='set_key '+str(keys[i])) 
+                   for i in range(len(keys))]
+        markup = add_rowed_buttons(buttons=buttons, markup=markup)
+    markup.add(view_keys_button, menu_button)
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)   
+
+
+@bot.callback_query_handler(func=lambda f: 'rename_key' in f.data)
+def rename_key_menu(query):
+    id = query.from_user.id
+    internal_id = query.data.split()[1]
+    text = 'Введите новое имя ключа'
+    message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    bot.register_next_step_handler(message, enter_key_rename, kwargs={'internal_id': internal_id})
+
+def enter_key_rename(message, **kwargs):
+    id = message.from_user.id
+    new_name = message.text
+    internal_id = kwargs['kwargs']['internal_id']
+    cursor.execute('SELECT key_id FROM Keys WHERE internal_id=?', (internal_id,))
+    outline_id = cursor.fetchall()[0][0]
+    if rename_key(key_id=outline_id, new_name=new_name):
+        cursor.execute('UPDATE Keys SET name=? WHERE internal_id=?', (new_name, internal_id))
+        connection.commit()
+        text = f'Успешно изменено имя ключа с id <code>{internal_id}</code> на <code>{new_name}</code>'
+    else:
+        text = 'При изменении имени ключа произошла ошибка'
+    markup = change_key_markup()
+    bot.send_message(chat_id=id, text=text, parse_mode='HTML', reply_markup=markup, protect_content=True)
+
+
+@bot.callback_query_handler(func=lambda f: 'set_limit_key' in f.data)
+def change_key_limit(query):
+    id = query.from_user.id
+    internal_id = query.data.split()[1]
+    text = 'Введите новый лимит ключа в гигабайтах'
+    message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    bot.register_next_step_handler(message, enter_new_key_limit, kwargs={'internal_id': internal_id})
+
+def enter_new_key_limit(message, **kwargs):
+    id = message.from_user.id
+    data_limit = str(message.text)
+    if not data_limit.isdigit():
+        text = 'Некорретный формат данных'
+    else:
+        data_limit = int(data_limit)
+        internal_id = kwargs['kwargs']['internal_id']
+        cursor.execute('SELECT key_id FROM Keys WHERE internal_id=?', (internal_id,))
+        outline_id = cursor.fetchall()[0][0]
+        if set_limit(key_id=outline_id, new_limit_gb=data_limit):
+            text = f'Успешно изменен лимит ключа с id <code>{internal_id}</code> на <code>{data_limit} ГБ</code>'
+        else:
+            text = 'При изменении лимита ключа произошла ошибка'
+    markup = change_key_markup()
+    bot.send_message(chat_id=id, text=text, parse_mode='HTML', reply_markup=markup, protect_content=True)
+
+
+@bot.callback_query_handler(func=lambda f: 'del_limit_key' in f.data)
+def delete_key_limit(query):
+    id = query.from_user.id
+    internal_id = query.data.split()[1]
+    cursor.execute('SELECT key_id FROM Keys WHERE internal_id=?', (internal_id,))
+    outline_id = cursor.fetchall()[0][0]
+    if delete_limit(key_id=outline_id):
+        text = f'Успешно удален лимит ключа с id <code>{internal_id}</code>'
+    else:
+        text = 'При удалении лимита ключа произошла ошибка'
+    markup = change_key_markup()
+    bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)  
+
+
 @bot.callback_query_handler(func=lambda f: 'del_key' in f.data)
-def delete_key_multifunction(query):
+def delete_key_existence(query):
     id = query.from_user.id
     menu_button = types.InlineKeyboardButton(text='Вернуться в меню', callback_data='menu')
     view_keys_button = types.InlineKeyboardButton(text='Список ключей', callback_data='view_all_keys')
@@ -619,7 +738,7 @@ def create_admin_key(query):
         }, row_width=2)
     text += f'ID ключа Outline: <code>{key.key_id}</code>\nИмя: <code>{key.name}</code>\n'
     text += f'Лимит в ГБ: <code>{data_limit}</code>\nПароль: <code>{key.password}</code>\n'
-    text += f'Порт: <code>{key.port}</code>\nМетод шифрования: <code>{key.method}</code>\n'
+    text += f'Метод шифрования: <code>{key.method}</code>\nПорт: <code>{key.port}</code>\n'
     bot.send_message(chat_id=id, text=text, parse_mode='HTML', reply_markup=markup, protect_content=True)
 
 
