@@ -7,6 +7,8 @@ from config import set_limit, delete_limit, rename_key
 from decouple import config
 from urllib.parse import quote
 from math import log, floor
+from base64 import b64decode
+from binascii import Error as ASCII_error
 
 bot = TeleBot(str(config('BOT_TOKEN')))
 
@@ -128,6 +130,25 @@ def url_prefix(prefix: str):
         return prefixes[prefix]
     else:
         return quote(string=prefix, encoding='utf-8')
+
+
+def decipher_key(link: str):
+    link = str(link.split('ss://')[1])
+    data = link.split('@')
+    userinfo = data[0]
+    link = data[1].split(':')[1]
+    port = int(link.split('/')[0])
+    try:
+        userinfo = b64decode(userinfo, validate=True)
+    except ASCII_error:
+        return ()
+    userinfo = userinfo.decode()
+    if ':' not in userinfo:
+        return ()
+    userinfo = userinfo.split(':')
+    method = userinfo[0]
+    password = userinfo[1]
+    return (method, password, port)
 
 
 @bot.message_handler(commands=['start', 'auth'])
@@ -619,9 +640,11 @@ def delete_key_existence(query):
 
 
 def create_new_key(user_id: str | int, name: str, key_id: str | None = None,
-                   data_limit_gb: int | None = int(config('DATA_LIMIT'))):
+                   data_limit_gb: int | None = int(config('DATA_LIMIT')),
+                   method: str | None = None, password: str | None = None,
+                   port: int | None = None):
     user_id = str(user_id)
-    key = create_key(name=name, key_id=key_id, data_limit_gb=data_limit_gb)
+    key = create_key(name=name, key_id=key_id, data_limit_gb=data_limit_gb, port=port, method=method, password=password)
     server = get_server_info()['hostnameForAccessKeys']
     key_req = 'INSERT INTO Keys (key_id, server, name, password, server_port, method, access_url) VALUES (?, ?, ?, ?, ?, ?, ?)'
     key_data = (key.key_id, server, key.name, key.password, key.port, key.method, key.access_url)
@@ -653,7 +676,8 @@ def get_new_key(query):
         text = 'Выберите способ задания <code>OutlineKey</code>'
         enter_button = types.InlineKeyboardButton(text='Ввести вручную', callback_data='enter_key_id')
         default_button = types.InlineKeyboardButton(text='По умолчанию', callback_data='create_admin_key')
-        markup.add(enter_button, default_button, view_keys_button, menu_button)
+        import_button = types.InlineKeyboardButton(text='Импортировать ключ', callback_data='import_key')
+        markup.add(enter_button, default_button, view_keys_button, import_button, menu_button)
         bot.edit_message_text(chat_id=id, message_id=query.message.id, text=text, parse_mode='HTML', reply_markup=markup)
         return
     cursor.execute('SELECT COUNT (key_id) FROM Ownership WHERE user_id=?', (id,))
@@ -670,6 +694,42 @@ def get_new_key(query):
     bot.edit_message_text(chat_id=id, message_id=query.message.id, text=response_text, parse_mode='HTML', reply_markup=markup)
 
 
+@bot.callback_query_handler(func=lambda f: f.data == 'import_key')
+def import_key_menu(query):
+    id = query.from_user.id
+    text = 'Введите ссылку ключа с предыдущего сервера'
+    message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
+    bot.delete_message(chat_id=id, message_id=query.message.id)
+    bot.register_next_step_handler(message, enter_key_link)
+
+def enter_key_link(message):
+    id = message.from_user.id
+    link = str(message.text)
+    markup = quick_markup({
+        'Попробовать снова': {'callback_data': 'import_key'},
+        'Вернуться в меню': {'callback_data': 'menu'}
+        }, row_width=2)
+    check = True
+    for string in ['ss://', '@']:
+        if string not in link:
+            check = False
+    if link.count(':') != 2 or link.count('/') != 3:
+        check = False
+    if not check:
+        text = 'Некорретный формат данных'
+        bot.send_message(chat_id=id, text=text, reply_markup=markup, protect_content=True)
+        return
+    key = decipher_key(link)
+    if not key:
+        text = 'Произошла ошибка при декодировании ключа'
+        bot.send_message(chat_id=id, text=text, reply_markup=markup, protect_content=True)
+        return
+    key_info = {'key_method': key[0], 'key_password': key[1], 'key_port': key[2]}
+    text = 'Введите <code>key.id</code> нового ключа (<code>None</code> для автонумерации)'
+    message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
+    bot.register_next_step_handler(message, enter_key_id, kwargs=key_info)
+
+
 @bot.callback_query_handler(func=lambda f: f.data == 'enter_key_id')
 def enter_key_id_menu(query):
     id = query.from_user.id
@@ -678,19 +738,23 @@ def enter_key_id_menu(query):
     bot.delete_message(chat_id=id, message_id=query.message.id)
     bot.register_next_step_handler(message, enter_key_id)
 
-def enter_key_id(message):
+def enter_key_id(message, **kwargs):
     id = message.from_user.id
     key_id = message.text
+    if kwargs:
+        kwargs = kwargs['kwargs']
     text = 'Введите <code>key.name</code> нового ключа'
     message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
-    bot.register_next_step_handler(message, enter_key_name, kwargs={'key_id': key_id})
+    bot.register_next_step_handler(message, enter_key_name, kwargs={'key_info': kwargs, 'key_id': key_id})
 
 def enter_key_name(message, **kwargs):
     id = message.from_user.id
     key_name = message.text
+    kwargs = kwargs['kwargs']
     text = 'Введите <code>key.data_limit</code> нового ключа в гигабайтах (<code>None</code> для безлимита)'
     message = bot.send_message(chat_id=id, text=text, parse_mode='HTML', protect_content=True)
-    bot.register_next_step_handler(message, enter_key_limit, kwargs={'key_id': kwargs['kwargs']['key_id'],
+    bot.register_next_step_handler(message, enter_key_limit, kwargs={'key_id': kwargs['key_id'],
+                                                                     'key_info': kwargs['key_info'],
                                                                       'key_name': key_name})
 
 def enter_key_limit(message, **kwargs):
@@ -721,6 +785,13 @@ def create_admin_key(query):
             data_limit = None
         else:
             data_limit = int(data_limit)
+        if query.json['key_info']:
+            key_method = str(query.json['key_info']['key_method'])
+            key_password = str(query.json['key_info']['key_password'])
+            key_port = int(query.json['key_info']['key_port'])
+            is_imported = True
+        else:
+            is_imported = False
     else:
         bot.delete_message(chat_id=id, message_id=query.message.id)
         cursor.execute('SELECT COUNT (key_id) FROM Ownership WHERE user_id=?', (id,))
@@ -728,7 +799,12 @@ def create_admin_key(query):
         key_id = None
         key_name = str(id) + '_' + str(count+1)
         data_limit = None
-    data = create_new_key(user_id=id, name=key_name, key_id=key_id, data_limit_gb=data_limit)
+        is_imported = False
+    if is_imported:
+        data = create_new_key(user_id=id, name=key_name, key_id=key_id, data_limit_gb=data_limit,
+                              method=key_method, password=key_password, port=key_port) # pyright: ignore[reportPossiblyUnboundVariable]
+    else:
+        data = create_new_key(user_id=id, name=key_name, key_id=key_id, data_limit_gb=data_limit)
     key = data[0]
     text = data[1]
     markup = quick_markup({
